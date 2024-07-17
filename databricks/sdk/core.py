@@ -38,7 +38,7 @@ class ApiClient:
         self._cfg = cfg
         # See https://github.com/databricks/databricks-sdk-go/blob/main/client/client.go#L34-L35
         self._debug_truncate_bytes = cfg.debug_truncate_bytes if cfg.debug_truncate_bytes else 96
-        self._retry_timeout_seconds = cfg.retry_timeout_seconds if cfg.retry_timeout_seconds else 300
+        self._retry_timeout_seconds = cfg.retry_timeout_seconds if cfg.retry_timeout_seconds else 30
         self._user_agent_base = cfg.user_agent
         self._session = requests.Session()
         self._session.auth = self._authenticate
