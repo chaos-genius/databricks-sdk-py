@@ -560,7 +560,7 @@ class DataPuller:
             ("cluster events", self.get_clusters_events),
             ("instance pools", self.get_instance_pools_list),
             ("warehouses list", self.get_sql_warehouses_list),
-            ("query history", self.get_sql_query_history),
+            # ("query history", self.get_sql_query_history),
             # ("jobs list", self.get_jobs_list),
             # ("job runs", self.get_job_runs_list),
             ("users list", self.get_users_list),
