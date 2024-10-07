@@ -12,6 +12,7 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.chaosgenius.cg_config import CGConfig
 from databricks.sdk.service.compute import InstancePoolAndStats
 from databricks.sdk.service.iam import User
+from databricks.sdk.service.jobs import BaseJob
 from databricks.sdk.service.sql import EndpointInfo
 
 
@@ -66,6 +67,10 @@ class DataPuller:
         self._logger.info("Getting warehouses list")
         self._wh_list = self._get_full_warehouse_info()
         self._logger.info(f"Total warehouses: {len(self._wh_list)}")
+
+        self._logger.info("Getting jobs list")
+        self._job_list = self._get_full_jobs_info()
+        self._logger.info(f"Total jobs: {len(self._job_list)}")
 
         self._logger.info("Getting users list")
         self._user_list = self._get_full_user_info()
@@ -156,6 +161,15 @@ class DataPuller:
             "id",
         )
 
+    def _get_full_jobs_info(self) -> list[BaseJob]:
+        self._logger.info("Getting workspace jobs.")
+        return self._generic_get_full_list(
+            "job",
+            self._workspace_client.jobs.list,
+            self._workspace_client.jobs.get,
+            "job_id",
+        )
+
     def _get_full_user_info(self) -> list[User]:
         self._logger.info("Getting workspace users.")
         return self._generic_get_full_list(
@@ -164,6 +178,25 @@ class DataPuller:
             self._workspace_client.users.get,
             "id",
         )
+
+    def get_jobs_list(self) -> bool:
+        self._logger.info("Saving jobs list.")
+        self._add_status_entry("jobs", "initializing", {})
+        try:
+            jobs_df = pd.DataFrame(
+                [
+                    {"job_id": job.job_id, "data": json.dumps(job.as_dict())}
+                    for job in self._job_list
+                ]
+            )
+            if not jobs_df.empty:
+                self._write_to_table(jobs_df, "jobs_list")
+            self._add_status_entry("jobs", "success", {})
+            return True
+        except Exception:
+            self._logger.exception("Saving jobs failed :(")
+            self._add_status_entry("jobs", "failed", {})
+            return False
 
     def _add_status_entry(self, module: str, status: str, data: dict):
         self._write_to_table(
@@ -269,6 +302,7 @@ class DataPuller:
         data = [
             ("instance pools", self.get_instance_pools_list),
             ("warehouses list", self.get_sql_warehouses_list),
+            ("jobs list", self.get_jobs_list),
             ("users list", self.get_users_list),
         ]
 
