@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 
@@ -9,7 +10,7 @@ from databricks.sdk.service import iam
 from pyspark.sql.session import SparkSession
 
 
-def initiate_data_pull(
+async def initiate_data_pull(
     host: str,
     account_id: str,
     client_id: str,
@@ -75,39 +76,74 @@ def initiate_data_pull(
     # TODO: add workspaces from config in case not account admin
 
     logger.info("Looping through workspaces.")
-    for w_name, w_id, w_url in w_list:
-        try:
-            if account_admin:
-                logger.info(
-                    f"Updating permissions of SP for workspace {w_id} {w_name}."
-                )
-                a.workspace_assignment.update(
-                    workspace_id=w_id,
-                    principal_id=principal_id,
-                    permissions=[iam.WorkspacePermission.ADMIN],
-                )
-                w = a.get_workspace_client(a.workspaces.get(w_id))
-            else:
-                logger.info("We are not account admin, skipping permission update.")
-                w = WorkspaceClient(
-                    host=w_url,
-                    client_id=client_id,
-                    client_secret=client_secret,
-                )
+    tasks = [
+        update_permissions_and_pull_data(
+            w_name=w_name,
+            w_id=w_id,
+            w_url=w_url,
+            account_admin=account_admin,
+            account_client=a,
+            client_id=client_id,
+            client_secret=client_secret,
+            principal_id=principal_id,
+            customer_config=customer_config,
+            spark_session=spark_session,
+            save_to_csv=False,
+            logger=logger,
+        )
+        for w_name, w_id, w_url in w_list
+    ]
+    await asyncio.gather(*tasks)
 
-            logger.info(f"NEW RUN for workspace ID: {w_id}, {w_name}!!!!!")
-            DataPuller(
-                workspace_id=str(w_id),
-                workspace_client=w,
-                customer_config=customer_config,
-                spark_session=spark_session,
-                save_to_csv=False,
-                logger=logger,
+    spark_log_handler.close()
+
+
+async def update_permissions_and_pull_data(
+    w_name: str,
+    w_id: int,
+    w_url: str,
+    account_admin: bool,
+    a: AccountClient,
+    client_id: str,
+    client_secret: str,
+    principal_id: Optional[str],
+    customer_config: CGConfig,
+    spark_session: SparkSession,
+    save_to_csv: bool,
+    logger: logging.Logger,
+):
+    try:
+        if account_admin:
+            logger.info(
+                f"Updating permissions of SP for workspace {w_id} {w_name}."
             )
-        except Exception:
-            logger.error(
-                f"Failed pull for current workspace {w_id} {w_name}.", exc_info=True
+            a.workspace_assignment.update(
+                workspace_id=w_id,
+                principal_id=principal_id,
+                permissions=[iam.WorkspacePermission.ADMIN],
             )
+            w = a.get_workspace_client(a.workspaces.get(w_id))
+        else:
+            logger.info("We are not account admin, skipping permission update.")
+            w = WorkspaceClient(
+                host=w_url,
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+
+        logger.info(f"NEW RUN for workspace ID: {w_id}, {w_name}!!!!!")
+        DataPuller(
+            workspace_id=str(w_id),
+            workspace_client=w,
+            customer_config=customer_config,
+            spark_session=spark_session,
+            save_to_csv=save_to_csv,
+            logger=logger,
+        )
+    except Exception:
+        logger.error(
+            f"Failed pull for current workspace {w_id} {w_name}.", exc_info=True
+        )
 
 
 def get_list_of_all_workspaces(
