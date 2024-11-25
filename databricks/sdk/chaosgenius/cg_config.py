@@ -35,6 +35,28 @@ class CGConfig:
         except Exception:
             self.logger.error("Unable to create config table.", exc_info=True)
 
+        # fetch entire config
+        self.logger.info("Fetching chaosgenius config.")
+        self.df = self.sparkSession.sql(
+            "select * from chaosgenius.default.chaosgenius_config"
+        ).toPandas()
+        if self.df.empty:
+            # this is needed to ensure correct columns are there.
+            self.df = pd.DataFrame(
+                columns=[
+                    "entity_type",
+                    "entity_id",
+                    "include_entity",
+                    "entity_config",
+                ]
+            )
+        self.logger.info("Parsing chaosgenius config.")
+        # load string json as dict
+        self.df["entity_config"] = (
+            self.df["entity_config"].replace("", "{}").apply(lambda x: json.loads(x))
+        )
+        self.logger.info("Chaosgenius config is ready.")
+
     def get(
         self,
         entity_type: Optional[str] = None,
@@ -43,42 +65,16 @@ class CGConfig:
         entity_config_filter: Optional[dict] = None,
     ) -> pd.DataFrame:
         try:
-            where_query = ""
+            df = self.df.copy()
             if entity_type is not None:
-                where_query += f"where entity_type = '{entity_type}'"
+                df = df[df["entity_type"] == entity_type]
 
             if entity_ids is not None:
-                if where_query == "":
-                    where_query += "where "
-                else:
-                    where_query += " and "
-                entity_ids_string = ",".join(map(lambda x: f"'{x}'", entity_ids))
-                where_query += f"entity_id in ({entity_ids_string})"
+                df = df[df["entity_id"].isin(entity_ids)]
 
             if include_entity is not None:
-                if where_query == "":
-                    where_query += "where "
-                else:
-                    where_query += " and "
-                where_query += f"include_entity = '{include_entity}'"
+                df = df[df["include_entity"] == include_entity]
 
-            df = self.sparkSession.sql(
-                f"select * from chaosgenius.default.chaosgenius_config {where_query}"
-            ).toPandas()
-
-            if df.empty:
-                return pd.DataFrame(
-                    columns=[
-                        "entity_type",
-                        "entity_id",
-                        "include_entity",
-                        "entity_config",
-                    ]
-                )
-
-            df["entity_config"] = (
-                df["entity_config"].replace("", "{}").apply(lambda x: json.loads(x))
-            )
             if entity_config_filter is not None:
                 df = df[
                     df["entity_config"].apply(
