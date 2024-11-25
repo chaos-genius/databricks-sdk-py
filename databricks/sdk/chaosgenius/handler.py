@@ -82,7 +82,7 @@ async def initiate_data_pull(
             w_id=w_id,
             w_url=w_url,
             account_admin=account_admin,
-            account_client=a,
+            a=a,
             client_id=client_id,
             client_secret=client_secret,
             principal_id=principal_id,
@@ -144,6 +144,12 @@ async def update_permissions_and_pull_data(
         logger.error(
             f"Failed pull for current workspace {w_id} {w_name}.", exc_info=True
         )
+
+    # flush logs
+    for log_handler in logger.handlers:
+        if isinstance(log_handler, LogSparkDBHandler):
+            log_handler.flush()
+            break
 
 
 def get_list_of_all_workspaces(
