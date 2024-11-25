@@ -97,11 +97,12 @@ class CGConfig:
         include_entity: Optional[str] = None,
         entity_config_filter: Optional[dict] = None,
     ) -> set[str]:
-        return set(
-            self.get(
-                entity_type=entity_type,
-                entity_ids=entity_ids,
-                include_entity=include_entity,
-                entity_config_filter=entity_config_filter,
-            )["entity_id"].values.tolist()
+        df = self.get(
+            entity_type=entity_type,
+            entity_ids=entity_ids,
+            include_entity=include_entity,
+            entity_config_filter=entity_config_filter,
         )
+        if df.empty:
+            return set()
+        return set(df["entity_id"].values.tolist())
