@@ -1,5 +1,9 @@
+import asyncio
+import datetime as dt
 import logging
 from typing import Optional
+
+import pandas as pd
 
 from databricks.sdk import AccountClient, WorkspaceClient
 from databricks.sdk.chaosgenius.cg_config import CGConfig
@@ -9,7 +13,7 @@ from databricks.sdk.service import iam
 from pyspark.sql.session import SparkSession
 
 
-def initiate_data_pull(
+async def initiate_data_pull(
     host: str,
     account_id: str,
     client_id: str,
@@ -69,55 +73,105 @@ def initiate_data_pull(
             customer_config=customer_config,
             account_client=a,
         )
-        w_list = [(i, j, "") for i, j in w_list]
     else:
         w_list = workspace_list
     # TODO: add workspaces from config in case not account admin
 
-    logger.info("Looping through workspaces.")
-    for w_name, w_id, w_url in w_list:
-        try:
-            if account_admin:
-                logger.info(
-                    f"Updating permissions of SP for workspace {w_id} {w_name}."
-                )
-                a.workspace_assignment.update(
-                    workspace_id=w_id,
-                    principal_id=principal_id,
-                    permissions=[iam.WorkspacePermission.ADMIN],
-                )
-                w = a.get_workspace_client(a.workspaces.get(w_id))
-            else:
-                logger.info("We are not account admin, skipping permission update.")
-                w = WorkspaceClient(
-                    host=w_url,
-                    client_id=client_id,
-                    client_secret=client_secret,
-                )
+    try:
+        logger.info("Saving workspace info to table.")
+        save_workspaces_to_table(w_list, spark_session)
+    except Exception as e:
+        logger.exception("Unable to save workspace info.")
+        raise e
 
-            logger.info(f"NEW RUN for workspace ID: {w_id}, {w_name}!!!!!")
-            DataPuller(
-                workspace_id=str(w_id),
-                workspace_client=w,
-                customer_config=customer_config,
-                spark_session=spark_session,
-                save_to_csv=False,
-                logger=logger,
+    logger.info("Looping through workspaces.")
+    tasks = [
+        update_permissions_and_pull_data(
+            w_name=w_name,
+            w_id=w_id,
+            w_url=w_url,
+            account_admin=account_admin,
+            a=a,
+            client_id=client_id,
+            client_secret=client_secret,
+            principal_id=principal_id,
+            customer_config=customer_config,
+            spark_session=spark_session,
+            save_to_csv=False,
+            logger=logger,
+        )
+        for w_name, w_id, w_url in w_list
+    ]
+    await asyncio.gather(*tasks)
+
+    spark_log_handler.close()
+
+
+async def update_permissions_and_pull_data(
+    w_name: str,
+    w_id: int,
+    w_url: str,
+    account_admin: bool,
+    a: AccountClient,
+    client_id: str,
+    client_secret: str,
+    principal_id: Optional[str],
+    customer_config: CGConfig,
+    spark_session: SparkSession,
+    save_to_csv: bool,
+    logger: logging.Logger,
+):
+    try:
+        if account_admin:
+            logger.info(f"Updating permissions of SP for workspace {w_id} {w_name}.")
+            a.workspace_assignment.update(
+                workspace_id=w_id,
+                principal_id=principal_id,
+                permissions=[iam.WorkspacePermission.ADMIN],
             )
-        except Exception:
-            logger.error(
-                f"Failed pull for current workspace {w_id} {w_name}.", exc_info=True
+            w = a.get_workspace_client(a.workspaces.get(w_id))
+        else:
+            logger.info("We are not account admin, skipping permission update.")
+            w = WorkspaceClient(
+                host=w_url,
+                client_id=client_id,
+                client_secret=client_secret,
             )
+
+        logger.info(f"NEW RUN for workspace ID: {w_id}, {w_name}!!!!!")
+        DataPuller(
+            workspace_id=str(w_id),
+            workspace_client=w,
+            customer_config=customer_config,
+            spark_session=spark_session,
+            save_to_csv=save_to_csv,
+            logger=logger,
+        )
+    except Exception:
+        logger.error(
+            f"Failed pull for current workspace {w_id} {w_name}.", exc_info=True
+        )
+
+    # flush logs
+    for log_handler in logger.handlers:
+        if isinstance(log_handler, LogSparkDBHandler):
+            log_handler.flush()
+            break
 
 
 def get_list_of_all_workspaces(
     logger: logging.Logger,
     customer_config: CGConfig,
     account_client: AccountClient,
-) -> list[tuple[str, int]]:
+) -> list[tuple[str, int, str]]:
     logger.info("Getting list of all workspaces.")
     w_list = [
-        (w.workspace_name, w.workspace_id) for w in account_client.workspaces.list()
+        (
+            w.workspace_name,
+            w.workspace_id,
+            account_client.config.environment.deployment_url(w.deployment_name),
+        )
+        for w in account_client.workspaces.list()
     ]
     logger.info(f"Current len of w_list: {len(w_list)}")
 
@@ -134,7 +188,15 @@ def get_list_of_all_workspaces(
             )
             try:
                 w = account_client.workspaces.get(int(addition_w_id))
-                w_list.append(w.workspace_name, w.workspace_id)
+                w_list.append(
+                    (
+                        w.workspace_name,
+                        w.workspace_id,
+                        account_client.config.environment.deployment_url(
+                            w.deployment_name
+                        ),
+                    )
+                )
                 logger.info(f"added workspace ID {addition_w_id} to list.")
             except Exception:
                 logger.error(
@@ -176,18 +238,32 @@ def add_config_workspaces_to_list(
 ) -> list[tuple[str, int]]:
     w_list = set(w_list)
     logger.info(f"Num initial workspaces: {len(w_list)}.")
-    additional_workspaces = set(customer_config.get(
-        entity_type="workspace",
-        include_entity="yes",
-    )["entity_id"].to_list())
+    additional_workspaces = set(
+        customer_config.get(
+            entity_type="workspace",
+            include_entity="yes",
+        )["entity_id"].to_list()
+    )
     logger.info(f"Num additional workspaces: {len(additional_workspaces)}.")
     w_list = w_list.union(additional_workspaces)
     logger.info(f"Num workspaces after adding: {len(w_list)}.")
-    w_to_remove = set(customer_config.get(
-        entity_type="workspace",
-        include_entity="no",
-    )["entity_id"].to_list())
+    w_to_remove = set(
+        customer_config.get(
+            entity_type="workspace",
+            include_entity="no",
+        )["entity_id"].to_list()
+    )
     logger.info(f"Num workspaces to remove: {len(w_to_remove)}.")
     w_list = w_list.difference(w_to_remove)
     logger.info(f"Num workspaces after removing: {len(w_list)}.")
     return [("unknown_name", w) for w in w_list]
+
+
+def save_workspaces_to_table(w_list: list[tuple[str, int, str]], spark: SparkSession):
+    df = pd.DataFrame(
+        w_list, columns=["workspace_name", "workspace_id", "workspace_url"]
+    )
+    df["date"] = dt.datetime.now()
+    spark.createDataFrame(df).write.saveAsTable(
+        "chaosgenius.default.workspace_list", mode="append"
+    )

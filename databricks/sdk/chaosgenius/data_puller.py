@@ -49,16 +49,6 @@ class DataPuller:
             f"pull time: {self._pull_time}, end_time: {self._end_time}, "
             f"save_to_csv: {self._save_to_csv}"
         )
-        self._add_status_entry(
-            "overall",
-            "initializing",
-            {
-                "workspace_id": self._workspace_id,
-                "pull_time": int(self._pull_time.timestamp() * 1000),
-                "end_time": self._end_time,
-                "save_to_csv": self._save_to_csv,
-            },
-        )
 
         self._logger.info("Getting instance pools list")
         self._ip_list = self._get_full_instance_pool_info()
@@ -77,14 +67,7 @@ class DataPuller:
         self._logger.info(f"Total users: {len(self._user_list)}")
 
         self._logger.info("Starting data pull")
-        results = self.get_all()
-        success = True
-        for res in results:
-            if res[1] is False:
-                success = False
-                break
-        status = "success" if success else "failed"
-        self._add_status_entry("overall", status=status, data={"results": results})
+        self.get_all()
         self._logger.info("Completed data pull.")
 
     def _generic_get_full_list(
@@ -94,9 +77,22 @@ class DataPuller:
         root_item_getter: Callable,
         id_attribute_name: str,
         additional_ids: Optional[set] = None,
+        root_list_getter_args: Optional[list] = None,
+        root_list_getter_kwargs: Optional[dict] = None,
+        root_item_getter_args: Optional[list] = None,
+        root_item_getter_kwargs: Optional[dict] = None,
     ) -> list:
+        # initialize to empty values if None
+        root_list_getter_args = root_list_getter_args or []
+        root_list_getter_kwargs = root_list_getter_kwargs or {}
+        root_item_getter_args = root_item_getter_args or []
+        root_item_getter_kwargs = root_item_getter_kwargs or {}
+
         self._logger.info(f"Getting {name}.")
-        root_list = [i for i in root_list_getter()]
+        root_list = [i for i in root_list_getter(
+            *root_list_getter_args,
+            **root_list_getter_kwargs
+        )]
         root_list_ids = set(getattr(i, id_attribute_name) for i in root_list)
         self._logger.info(f"Current count: {len(root_list_ids)}")
 
@@ -118,7 +114,11 @@ class DataPuller:
         for item_id in new_ids:
             self._logger.info(f"New {name} ID {item_id} not in list. Getting info.")
             try:
-                root_list.append(root_item_getter(item_id))
+                root_list.append(root_item_getter(
+                    item_id,
+                    *root_item_getter_args,
+                    **root_item_getter_kwargs,
+                ))
             except Exception:
                 self._logger.exception(f"Failed to get {name} ID {item_id}.")
 
@@ -168,6 +168,7 @@ class DataPuller:
             self._workspace_client.jobs.list,
             self._workspace_client.jobs.get,
             "job_id",
+            root_list_getter_kwargs={"expand_tasks": True},
         )
 
     def _get_full_user_info(self) -> list[User]:
@@ -181,7 +182,6 @@ class DataPuller:
 
     def get_jobs_list(self) -> bool:
         self._logger.info("Saving jobs list.")
-        self._add_status_entry("jobs", "initializing", {})
         try:
             jobs_df = pd.DataFrame(
                 [
@@ -191,27 +191,10 @@ class DataPuller:
             )
             if not jobs_df.empty:
                 self._write_to_table(jobs_df, "jobs_list")
-            self._add_status_entry("jobs", "success", {})
             return True
         except Exception:
             self._logger.exception("Saving jobs failed :(")
-            self._add_status_entry("jobs", "failed", {})
             return False
-
-    def _add_status_entry(self, module: str, status: str, data: dict):
-        self._write_to_table(
-            df=pd.DataFrame(
-                [
-                    {
-                        "module": module,
-                        "status": status,
-                        "data": json.dumps(data),
-                        "entry_time": dt.datetime.now(),
-                    }
-                ]
-            ),
-            table_name="chaosgenius_status",
-        )
 
     def _write_to_table(
         self,
@@ -240,7 +223,6 @@ class DataPuller:
 
     def get_instance_pools_list(self) -> bool:
         self._logger.info("Saving instance pools list.")
-        self._add_status_entry("instance_pools", "initializing", {})
         try:
             ip_df = pd.DataFrame(
                 [
@@ -253,16 +235,13 @@ class DataPuller:
             )
             if not ip_df.empty:
                 self._write_to_table(ip_df, "instance_pools_list")
-            self._add_status_entry("instance_pools", "success", {})
             return True
         except Exception:
             self._logger.exception("Saving instance pools failed :(")
-            self._add_status_entry("instance_pools", "failed", {})
             return False
 
     def get_sql_warehouses_list(self) -> bool:
         self._logger.info("Saving warehouses list.")
-        self._add_status_entry("warehouses", "initializing", {})
         try:
             wh_df = pd.DataFrame(
                 [
@@ -272,16 +251,13 @@ class DataPuller:
             )
             if not wh_df.empty:
                 self._write_to_table(wh_df, "warehouses_list")
-            self._add_status_entry("warehouses", "success", {})
             return True
         except Exception:
             self._logger.exception("Saving warehouses failed :(")
-            self._add_status_entry("warehouses", "failed", {})
             return False
 
     def get_users_list(self) -> bool:
         self._logger.info("Saving users list.")
-        self._add_status_entry("users", "initializing", {})
         try:
             users_df = pd.DataFrame(
                 [
@@ -291,11 +267,9 @@ class DataPuller:
             )
             if not users_df.empty:
                 self._write_to_table(users_df, "users_list")
-            self._add_status_entry("users", "success", {})
             return True
         except Exception:
             self._logger.exception("Saving users failed :(")
-            self._add_status_entry("users", "failed", {})
             return False
 
     def get_all(self) -> list[tuple[str, bool]]:
