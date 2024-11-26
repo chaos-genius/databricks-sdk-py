@@ -121,9 +121,17 @@ class LogSparkDBHandler(logging.Handler):
             traceback.print_exc()
             print("LOGGING TO SPARK FAILED!!!")
 
-    def flush(self):
-        with self.lock:
-            self._flush_buffer()
+    def flush(self, retry_count: int = 3):
+        while retry_count != 0:
+            try:
+                with self.lock:
+                    self._flush_buffer()
+                return
+            except Exception as e:
+                print(f"Failed to flush buffer: {e}")
+                traceback.print_exc()
+            retry_count -= 1
+        print(f"Failed to flush buffer after {retry_count} retries. Giving up.")
 
     def close(self):
         # Put the sentinel value in the queue to stop the thread
