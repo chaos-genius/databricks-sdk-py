@@ -78,7 +78,8 @@ async def initiate_data_pull(
     # TODO: add workspaces from config in case not account admin
 
     try:
-        save_workspaces_to_table(w_list)
+        logger.info("Saving workspace info to table.")
+        save_workspaces_to_table(w_list, spark_session)
     except Exception as e:
         logger.exception("Unable to save workspace info.")
         raise e
