@@ -13,6 +13,7 @@ from databricks.sdk.chaosgenius.cg_config import CGConfig
 from databricks.sdk.service.compute import InstancePoolAndStats
 from databricks.sdk.service.iam import User
 from databricks.sdk.service.jobs import BaseJob
+from databricks.sdk.service.pipelines import GetPipelineResponse
 from databricks.sdk.service.sql import EndpointInfo
 
 
@@ -66,11 +67,15 @@ class DataPuller:
         self._user_list = self._get_full_user_info()
         self._logger.info(f"Total users: {len(self._user_list)}")
 
+        self._logger.info("Getting pipelines list")
+        self._pipeline_list = self._get_full_pipeline_info()
+        self._logger.info(f"Total pipelines: {len(self._pipeline_list)}")
+
         self._logger.info("Starting data pull")
         self.get_all()
         self._logger.info("Completed data pull.")
 
-    def _generic_get_full_list(
+    def  _generic_get_full_list(
         self,
         name: str,
         root_list_getter: Callable,
@@ -180,6 +185,15 @@ class DataPuller:
             "id",
         )
 
+    def _get_full_pipeline_info(self) -> list[GetPipelineResponse]:
+        self._logger.info("Getting workspace pipelines.")
+        return self._generic_get_full_list(
+            "pipeline",
+            self._workspace_client.pipelines.list,
+            self._workspace_client.pipelines.get,
+            "pipeline_id",
+        )
+
     def get_jobs_list(self) -> bool:
         self._logger.info("Saving jobs list.")
         try:
@@ -272,12 +286,29 @@ class DataPuller:
             self._logger.exception("Saving users failed :(")
             return False
 
+    def get_pipelines_list(self) -> bool:
+        self._logger.info("Saving pipelines list.")
+        try:
+            pipelines_df = pd.DataFrame(
+                [
+                    {"pipeline_id": p.pipeline_id, "data": json.dumps(p.as_dict())}
+                    for p in self._pipeline_list
+                ]
+            )
+            if not pipelines_df.empty:
+                self._write_to_table(pipelines_df, "pipelines_list")
+            return True
+        except Exception:
+            self._logger.exception("Saving pipelines failed :(")
+            return False
+
     def get_all(self) -> list[tuple[str, bool]]:
         data = [
             ("instance pools", self.get_instance_pools_list),
             ("warehouses list", self.get_sql_warehouses_list),
             ("jobs list", self.get_jobs_list),
             ("users list", self.get_users_list),
+            ("pipelines list", self.get_pipelines_list),
         ]
 
         results = []
