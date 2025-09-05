@@ -75,7 +75,7 @@ class DataPuller:
         self.get_all()
         self._logger.info("Completed data pull.")
 
-    def  _generic_get_full_list(
+    def _generic_get_full_list(
         self,
         name: str,
         root_list_getter: Callable,
@@ -94,10 +94,10 @@ class DataPuller:
         root_item_getter_kwargs = root_item_getter_kwargs or {}
 
         self._logger.info(f"Getting {name}.")
-        root_list = [i for i in root_list_getter(
-            *root_list_getter_args,
-            **root_list_getter_kwargs
-        )]
+        root_list = [
+            i
+            for i in root_list_getter(*root_list_getter_args, **root_list_getter_kwargs)
+        ]
         root_list_ids = set(getattr(i, id_attribute_name) for i in root_list)
         self._logger.info(f"Current count: {len(root_list_ids)}")
 
@@ -119,11 +119,13 @@ class DataPuller:
         for item_id in new_ids:
             self._logger.info(f"New {name} ID {item_id} not in list. Getting info.")
             try:
-                root_list.append(root_item_getter(
-                    item_id,
-                    *root_item_getter_args,
-                    **root_item_getter_kwargs,
-                ))
+                root_list.append(
+                    root_item_getter(
+                        item_id,
+                        *root_item_getter_args,
+                        **root_item_getter_kwargs,
+                    )
+                )
             except Exception:
                 self._logger.exception(f"Failed to get {name} ID {item_id}.")
 
@@ -189,7 +191,7 @@ class DataPuller:
         self._logger.info("Getting workspace pipelines.")
         return self._generic_get_full_list(
             "pipeline",
-            self._workspace_client.pipelines.list,
+            self._workspace_client.pipelines.list_pipelines,
             self._workspace_client.pipelines.get,
             "pipeline_id",
         )
