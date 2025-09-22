@@ -134,7 +134,7 @@ class DataPuller:
 
         self._logger.info("Removing items from customer config.")
         ids_to_remove = self._customer_config.get_ids(
-            entity_type="cluster",
+            entity_type=name,  # Use the dynamic entity type instead of hardcoded "cluster"
             include_entity="no",
             entity_config_filter={"workspace_id": self._workspace_id},
         )
@@ -188,13 +188,80 @@ class DataPuller:
         )
 
     def _get_full_pipeline_info(self) -> list[GetPipelineResponse]:
-        self._logger.info("Getting workspace pipelines.")
-        return self._generic_get_full_list(
-            "pipeline",
-            self._workspace_client.pipelines.list_pipelines,
-            self._workspace_client.pipelines.get,
-            "pipeline_id",
+        """
+        Get complete pipeline information for all pipelines in the workspace.
+
+        This method ensures we get the full GetPipelineResponse data (including spec,
+        clusters, libraries, etc.) by calling get() for each pipeline returned by
+        list_pipelines(). The generic method doesn't work for pipelines because:
+        1. list_pipelines() returns PipelineStateInfo (limited data)
+        2. get() returns GetPipelineResponse (complete data)
+        3. We need the complete data for all pipelines, not just new ones
+
+        Returns:
+            list[GetPipelineResponse]: Complete pipeline information for all pipelines
+        """
+        self._logger.info("Getting workspace pipelines with complete data.")
+
+        # Step 1: Get basic pipeline list using list_pipelines()
+        # This returns PipelineStateInfo objects with limited data
+        self._logger.info("Fetching basic pipeline list...")
+        basic_pipeline_list = [
+            pipeline for pipeline in self._workspace_client.pipelines.list_pipelines()
+        ]
+        self._logger.info(f"Found {len(basic_pipeline_list)} pipelines in basic list")
+
+        # Step 2: Get additional pipeline IDs from customer config
+        self._logger.info("Adding pipelines from customer config...")
+        config_ids = self._customer_config.get_ids(
+            entity_type="pipeline",
+            include_entity="yes",
+            entity_config_filter={"workspace_id": self._workspace_id},
         )
+        self._logger.info(f"Found {len(config_ids)} pipeline IDs from customer config")
+
+        # Step 3: Collect all unique pipeline IDs
+        basic_pipeline_ids = {
+            p.pipeline_id for p in basic_pipeline_list if p.pipeline_id
+        }
+        all_pipeline_ids = basic_pipeline_ids.union(config_ids)
+        self._logger.info(
+            f"Total unique pipeline IDs to fetch: {len(all_pipeline_ids)}"
+        )
+
+        # Step 4: Get complete data for each pipeline using get()
+        # This returns GetPipelineResponse objects with full data including spec
+        complete_pipeline_list = []
+        for pipeline_id in all_pipeline_ids:
+            try:
+                self._logger.info(f"Fetching complete data for pipeline: {pipeline_id}")
+                complete_pipeline = self._workspace_client.pipelines.get(pipeline_id)
+                complete_pipeline_list.append(complete_pipeline)
+            except Exception as e:
+                self._logger.exception(
+                    f"Failed to get complete data for pipeline {pipeline_id}: {e}"
+                )
+
+        # Step 5: Remove pipelines that should be excluded based on customer config
+        self._logger.info("Removing excluded pipelines from customer config...")
+        ids_to_remove = self._customer_config.get_ids(
+            entity_type="pipeline",
+            include_entity="no",
+            entity_config_filter={"workspace_id": self._workspace_id},
+        )
+        self._logger.info(f"Pipeline IDs to be removed: {len(ids_to_remove)}")
+
+        # Filter out excluded pipelines
+        final_pipeline_list = [
+            pipeline
+            for pipeline in complete_pipeline_list
+            if pipeline.pipeline_id not in ids_to_remove
+        ]
+
+        self._logger.info(
+            f"Final pipeline count after exclusions: {len(final_pipeline_list)}"
+        )
+        return final_pipeline_list
 
     def get_jobs_list(self) -> bool:
         self._logger.info("Saving jobs list.")
@@ -289,7 +356,30 @@ class DataPuller:
             return False
 
     def get_pipelines_list(self) -> bool:
-        self._logger.info("Saving pipelines list.")
+        """
+        Save complete pipeline data to the catalog.
+
+        This method saves the full GetPipelineResponse data for all pipelines, including:
+        - Basic info: pipeline_id, name, creator_user_name, run_as_user_name, state, health
+        - Runtime info: cluster_id, last_modified, cause
+        - Update history: latest_updates with timestamps and states
+        - Complete specification (spec): clusters, libraries, notifications, configuration,
+          catalog, target, channel, continuous, development, photon, serverless, storage,
+          edition, filters, deployment, trigger, gateway_definition, ingestion_definition
+
+        The data is stored in chaosgenius.default.pipelines_list table with columns:
+        - pipeline_id: Unique pipeline identifier
+        - data: Complete JSON data from GetPipelineResponse.as_dict()
+        - data_end_time: End timestamp of data collection period
+        - data_pull_time: When the data was pulled
+        - workspace_id: Workspace identifier
+        - dagster_run_id: Dagster run identifier (if applicable)
+        - dagster_partition_key: Dagster partition key (if applicable)
+
+        Returns:
+            bool: True if successful, False if failed
+        """
+        self._logger.info("Saving complete pipelines list with full data.")
         try:
             pipelines_df = pd.DataFrame(
                 [
@@ -299,6 +389,11 @@ class DataPuller:
             )
             if not pipelines_df.empty:
                 self._write_to_table(pipelines_df, "pipelines_list")
+                self._logger.info(
+                    f"Successfully saved {len(pipelines_df)} pipelines with complete data"
+                )
+            else:
+                self._logger.info("No pipelines found to save")
             return True
         except Exception:
             self._logger.exception("Saving pipelines failed :(")
