@@ -344,7 +344,16 @@ class DataPuller:
         try:
             users_df = pd.DataFrame(
                 [
-                    {"user_id": i.id, "data": json.dumps(i.as_dict())}
+                    {
+                        "user_id": i.id,
+                        "data": json.dumps(
+                            {
+                                "active": i.active,
+                                "external_id": i.external_id,
+                                "user_name": i.user_name,
+                            }
+                        ),
+                    }
                     for i in self._user_list
                 ]
             )
